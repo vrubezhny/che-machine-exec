@@ -1169,8 +1169,8 @@ func TestApplyEnvCeilings(t *testing.T) {
 // membership. Order is admin-visible/admin-controllable behavior (see
 // resolveActiveActivitySources), so it's worth pinning down explicitly.
 func TestActivitySourceRegistry(t *testing.T) {
-	if len(allActivitySources) != 2 {
-		t.Fatalf("allActivitySources has %d entries, want 2", len(allActivitySources))
+	if len(allActivitySources) != 3 {
+		t.Fatalf("allActivitySources has %d entries, want 3", len(allActivitySources))
 	}
 	if got := allActivitySources[0].Name(); got != "tty" {
 		t.Errorf("allActivitySources[0].Name() = %q, want %q", got, "tty")
@@ -1178,11 +1178,17 @@ func TestActivitySourceRegistry(t *testing.T) {
 	if got := allActivitySources[1].Name(); got != "codex-app-server-hooks" {
 		t.Errorf("allActivitySources[1].Name() = %q, want %q", got, "codex-app-server-hooks")
 	}
+	if got := allActivitySources[2].Name(); got != "codex-app-server-api" {
+		t.Errorf("allActivitySources[2].Name() = %q, want %q", got, "codex-app-server-api")
+	}
 	if !defaultOnActivitySources["tty"] {
 		t.Error(`defaultOnActivitySources["tty"] should be true`)
 	}
 	if defaultOnActivitySources["codex-app-server-hooks"] {
 		t.Error(`defaultOnActivitySources["codex-app-server-hooks"] should be false (opt-in only)`)
+	}
+	if defaultOnActivitySources["codex-app-server-api"] {
+		t.Error(`defaultOnActivitySources["codex-app-server-api"] should be false (opt-in only)`)
 	}
 }
 

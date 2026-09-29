@@ -243,6 +243,7 @@ CLI Watcher detects activity through pluggable **activity sources** — each one
 |---|---|---|
 | `tty` | **on** | TTY-attached user processes (the original detection strategy — see [Activity Detection](#activity-detection) below). |
 | `codex-app-server-hooks` | off (opt-in) | A running `codex app-server` instance, via a status file its own managed hooks maintain. Requires provisioning `timeout/codex-hooks/` into the workspace image **before** `codex app-server` ever starts — see that directory's `README.md` for the full setup and why it can't be done at runtime. |
+| `codex-app-server-api` | off (opt-in) | A running `codex app-server` instance, via its own JSON-RPC control socket (`thread/loaded/list` + `thread/read`'s `status` field). No image provisioning or root needed — only requires the app-server's `--listen unix://...` socket to be reachable. Unlike `codex-app-server-hooks`, this source honors `activityWindow` (a momentary "active" observation is extended for the rest of the window, same as `tty`) — it does not honor `gracePeriod`/`maxProcessAge`. Trade-off vs. `codex-app-server-hooks`: no image-build step, but needs a live socket connection rather than a passively-written file. Both can be enabled together. |
 
 Which sources run is admin-only — same posture as `enabled`, since this controls what CLI Watcher is allowed to introspect, not per-project idling policy. Not configurable via `.noidle`.
 
@@ -252,7 +253,8 @@ Comma-separated list of `name` or `name:flag` entries:
 
 ```
 CLI_ACTIVITY_TRACKER_ACTIVITY_SOURCES=tty,codex-app-server-hooks
-CLI_ACTIVITY_TRACKER_ACTIVITY_SOURCES=codex-app-server-hooks           # tty still runs — see below
+CLI_ACTIVITY_TRACKER_ACTIVITY_SOURCES=codex-app-server-api             # tty still runs — see below
+CLI_ACTIVITY_TRACKER_ACTIVITY_SOURCES=codex-app-server-hooks,codex-app-server-api  # both codex sources together
 CLI_ACTIVITY_TRACKER_ACTIVITY_SOURCES=tty:disabled               # turn off a default-on source
 ```
 
@@ -268,7 +270,7 @@ The variable controls **both** which sources are active and the order they're sc
 1. **Explicit pass**: sources you list, in the exact order given.
 2. **Implicit pass**: any default-on source (currently just `tty`) you *didn't* mention, appended after, in its built-in registry order.
 
-So `CLI_ACTIVITY_TRACKER_ACTIVITY_SOURCES=codex-app-server-hooks` scans `codex-app-server-hooks` first, then `tty` (still on by default, just unmentioned). To turn `tty` off entirely, you must say so explicitly: `codex-app-server-hooks,tty:disabled`. Leaving the variable unset entirely behaves identically to mentioning no sources at all — both just run the default-on set in registry order.
+So `CLI_ACTIVITY_TRACKER_ACTIVITY_SOURCES=codex-app-server-api` scans `codex-app-server-api` first, then `tty` (still on by default, just unmentioned). To turn `tty` off entirely, you must say so explicitly: `codex-app-server-api,tty:disabled`. Leaving the variable unset entirely behaves identically to mentioning no sources at all — both just run the default-on set in registry order.
 
 The resolved list is always logged at startup (see [Logging](#logging)) — copy-paste the exact names shown there if you're unsure what's valid.
 
@@ -635,6 +637,7 @@ CLI Watcher:   CLI_ACTIVITY_TRACKER_VERBOSE not set (default: false)
 CLI Watcher: Compiled-in activity sources:
 CLI Watcher:   tty
 CLI Watcher:   codex-app-server-hooks
+CLI Watcher:   codex-app-server-api
 CLI Watcher:   CLI_ACTIVITY_TRACKER_ACTIVITY_SOURCES not set (default: tty)
 CLI Watcher: Activity source scan order: tty
 ```
@@ -642,7 +645,7 @@ CLI Watcher: Activity source scan order: tty
 If `CLI_ACTIVITY_TRACKER_ACTIVITY_SOURCES` names an unknown source or a malformed entry, a warning is logged right here, e.g.:
 
 ```
-CLI Watcher: Unknown activity source "codex" in CLI_ACTIVITY_TRACKER_ACTIVITY_SOURCES (valid: tty, codex-app-server-hooks), ignoring
+CLI Watcher: Unknown activity source "codex" in CLI_ACTIVITY_TRACKER_ACTIVITY_SOURCES (valid: tty, codex-app-server-hooks, codex-app-server-api), ignoring
 ```
 
 (A common mistake: the source is named `codex-app-server-hooks`, not `codex`.)
@@ -726,6 +729,28 @@ For `codex-app-server-hooks`, verbose mode additionally opens and parses its sta
 
 ```
 CLI Watcher: codex-app-server-hooks (pid 12345, socket ...) status file: last-event=UserPromptSubmit last-session-id=01a08835-... mtime=2026-09-21 14:32:07 +0000 UTC recentlyActive=true
+```
+
+For `codex-app-server-api`, verbose mode logs almost its entire scan reasoning — not just the final outcome — since there's no file or hook event log an admin could otherwise inspect to sanity-check "is this source even seeing my app-server": the loaded-thread-ID list, each thread's `status`/`activeFlags` as it's checked, a per-thread `thread/read` failure (without aborting the rest), and either the active thread found or a "checked N loaded thread(s), none active" summary. `connected` is logged once per fresh connection (not on every scan, since the connection is cached across ticks):
+
+```
+CLI Watcher: codex-app-server-api (pid 12345, socket /home/user/.codex/app-server-control/app-server-control.sock): connected
+CLI Watcher: codex-app-server-api (pid 12345, socket ...): 1 loaded thread(s): [01a08835-2ff8-7571-8a8c-d2bc17cce158]
+CLI Watcher: codex-app-server-api (pid 12345, socket ...): thread 01a08835-2ff8-7571-8a8c-d2bc17cce158 status=active activeFlags=[waitingOnUserInput]
+CLI Watcher: codex-app-server-api (pid 12345, socket ...): active thread 01a08835-2ff8-7571-8a8c-d2bc17cce158 (activeFlags=[waitingOnUserInput])
+CLI Watcher: [codex-app-server-api] Detected activity: codex-app-server-api (pid 12345, socket /home/user/.codex/app-server-control/app-server-control.sock) — reporting activity tick
+```
+
+Once no thread is currently active, this source falls back to `activityWindow` (same convention as `tty`'s TTY-atime check and the hooks source's status-file mtime): a momentary "active" observation keeps it reporting active for the rest of the window, logged explicitly either way:
+
+```
+CLI Watcher: codex-app-server-api (pid 12345, socket ...): thread 01a08835-2ff8-7571-8a8c-d2bc17cce158 status=idle activeFlags=[]
+CLI Watcher: codex-app-server-api (pid 12345, socket ...): no thread currently active, but last seen active 12s ago (within 20m30s activity window) - still reporting active
+```
+
+```
+CLI Watcher: codex-app-server-api (pid 12345, socket ...): last seen active 25m0s ago, outside 20m30s activity window
+CLI Watcher: codex-app-server-api (pid 12345, socket ...): checked 1 loaded thread(s), none active
 ```
 
 ## Upgrading from Previous Versions
@@ -1208,7 +1233,7 @@ go test ./timeout -cover
 ```
 
 **Note on test coverage:**
-- **Unit tests cover pure functions** (parsing, configuration, validation, defaults, YAML unmarshaling, env var loading, ceiling enforcement, activity-source selection/ordering (`parseActivitySourcesEnv`, `resolveActiveActivitySources`), `codex-app-server-hooks` cmdline matching and env-fallback logic)
+- **Unit tests cover pure functions** (parsing, configuration, validation, defaults, YAML unmarshaling, env var loading, ceiling enforcement, activity-source selection/ordering (`parseActivitySourcesEnv`, `resolveActiveActivitySources`), codex-app-server cmdline matching/env-fallback logic shared by both codex sources, and `codex-app-server-api`'s JSON-RPC request/response marshaling and active-thread decision logic — including an integration-style test against a fake codex app-server served over a real Unix socket, see `codex_app_server_api_test.go`)
 - **Core detection logic is untested by the automated suite** (process tree walking, TTY analysis, interactive process detection in `activity_source_tty.go` — the `(*ttyActivitySource).Scan` method and its helpers)
 
 **Why core detection logic requires manual testing:**
@@ -1216,4 +1241,4 @@ go test ./timeout -cover
 - Needs multiple process scenarios (shells, interactive CLIs, work processes, TTY states)
 - Depends on actual system process behavior and file descriptor states
 
-**For detection logic verification**: Use the manual test scenarios described above with real processes in a containerized development environment. For `codex-app-server-hooks`, see `timeout/codex-hooks/README.md`'s own verification procedure (install the managed hooks, run real codex sessions, confirm the status file and resulting activity ticks).
+**For detection logic verification**: Use the manual test scenarios described above with real processes in a containerized development environment. For `codex-app-server-hooks`, see `timeout/codex-hooks/README.md`'s own verification procedure (install the managed hooks, run real codex sessions, confirm the status file and resulting activity ticks). For `codex-app-server-api`, start a real `codex app-server --listen unix://...` instance, set `CLI_ACTIVITY_TRACKER_ACTIVITY_SOURCES=codex-app-server-api` and `CLI_ACTIVITY_TRACKER_VERBOSE=true`, and confirm in the logs (see [Verbose Activity Logging](#verbose-activity-logging)) that activity ticks track a live conversation's `status` field — appearing while a thread reports `active`, and continuing to appear until `activityWindow` elapses after the last time it was observed active (not stopping the instant `status` itself goes idle/systemError/etc.).

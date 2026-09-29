@@ -63,6 +63,7 @@ type ActivitySource interface {
 var allActivitySources = []ActivitySource{
 	newTTYActivitySource(),
 	newcodexAppServerHooksActivitySource(),
+	newCodexAppServerApiActivitySource(),
 }
 
 // defaultOnActivitySources lists sources active by default, even when
